@@ -28,7 +28,8 @@ const sendOtp = async (req, res, next) => {
   try {
     const parsed = forgotPasswordSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, message: parsed.error.errors[0].message });
+      const message = parsed.error.issues?.[0]?.message || parsed.error.errors?.[0]?.message || 'Invalid input';
+      return res.status(400).json({ success: false, message });
     }
 
     const email = parsed.data.email.toLowerCase().trim();
@@ -112,7 +113,8 @@ const verifyOtp = async (req, res, next) => {
   try {
     const parsed = verifyOtpSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, message: parsed.error.errors[0].message });
+      const message = parsed.error.issues?.[0]?.message || parsed.error.errors?.[0]?.message || 'Invalid input';
+      return res.status(400).json({ success: false, message });
     }
 
     const email = parsed.data.email.toLowerCase().trim();
@@ -156,7 +158,8 @@ const resetPassword = async (req, res, next) => {
   try {
     const parsed = resetPasswordSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, message: parsed.error.errors[0].message });
+      const message = parsed.error.issues?.[0]?.message || parsed.error.errors?.[0]?.message || 'Invalid input';
+      return res.status(400).json({ success: false, message });
     }
 
     const email = parsed.data.email.toLowerCase().trim();

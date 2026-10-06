@@ -11,8 +11,10 @@ const registerSchema = z.object({
 module.exports = async (req, res, next) => {
   try {
     const parsed = registerSchema.safeParse(req.body);
-    if (!parsed.success)
-      return res.status(400).json({ success: false, message: parsed.error.errors[0].message });
+    if (!parsed.success) {
+      const message = parsed.error.issues?.[0]?.message || parsed.error.errors?.[0]?.message || 'Invalid input';
+      return res.status(400).json({ success: false, message });
+    }
 
     const { name, password } = parsed.data;
     const email = parsed.data.email.toLowerCase();

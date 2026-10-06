@@ -7,30 +7,92 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-const defaultAllowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
-const configuredOrigins = [
-  process.env.CLIENT_URL,
-  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-  ...defaultAllowedOrigins,
-].filter(Boolean);
+// Trust proxy when behind Render / Vercel reverse proxy
+app.set('trust proxy', 1);
 
-const allowedOrigins = [...new Set(configuredOrigins)];
+/**
+ * Normalizes origin by trimming whitespace and removing trailing slashes.
+ */
+const normalizeOrigin = (origin) => {
+  if (!origin || typeof origin !== 'string') return '';
+  return origin.trim().replace(/\/+$/, '');
+};
+
+/**
+ * Builds list of allowed origins from environment and defaults.
+ */
+const getAllowedOrigins = () => {
+  const defaultAllowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+  ];
+
+  const envOrigins = [
+    process.env.CLIENT_URL,
+    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
+  ];
+
+  const combined = [...envOrigins, ...defaultAllowedOrigins]
+    .filter(Boolean)
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  return [...new Set(combined)];
+};
+
+/**
+ * Checks if a given origin matches allowed origins (including wildcard support like *.vercel.app).
+ */
+const isOriginAllowed = (origin, allowedOriginsList) => {
+  if (!origin) return true; // Allow non-browser requests (curl, server-to-server, postman)
+  const normalizedOrigin = normalizeOrigin(origin);
+
+  return allowedOriginsList.some((allowed) => {
+    if (allowed === '*' || allowed === normalizedOrigin) {
+      return true;
+    }
+    if (allowed.includes('*')) {
+      const escaped = allowed.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      const regex = new RegExp(`^${escaped}$`, 'i');
+      return regex.test(normalizedOrigin);
+    }
+    return false;
+  });
+};
 
 app.use(helmet());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-      return;
-    }
+// Health check endpoints (available before rate limits and without authentication)
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-}));
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      const allowedOrigins = getAllowedOrigins();
+      if (isOriginAllowed(origin, allowedOrigins)) {
+        callback(null, true);
+      } else {
+        console.warn(`[CORS] Request from disallowed origin: ${origin}`);
+        // Return callback(null, false) so browser rejects CORS cleanly without Express 500 error
+        callback(null, false);
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin'],
+    exposedHeaders: ['Authorization'],
+    optionsSuccessStatus: 204,
+    maxAge: 86400,
+  })
+);
 
 app.use(morgan('dev'));
 
