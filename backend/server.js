@@ -1,4 +1,11 @@
 require('dotenv').config();
+const dns = require('dns');
+
+// Prefer IPv4 across all DNS lookups to prevent IPv6 routing failures on Render/cloud containers
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 const mongoose = require('mongoose');
 const dbConnect = require('./src/common/database/dbConnect');
 const app = require('./src/app/app');

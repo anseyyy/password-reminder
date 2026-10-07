@@ -90,17 +90,28 @@ const sendOtp = async (req, res, next) => {
       </div>
     `;
 
-    await sendEmail({
-      to: email,
-      subject,
-      message: textMessage,
-      html: htmlMessage,
-    });
+    try {
+      await sendEmail({
+        to: email,
+        subject,
+        message: textMessage,
+        html: htmlMessage,
+      });
 
-    res.json({
-      success: true,
-      message: 'A 6-digit OTP code has been sent to your email.',
-    });
+      return res.json({
+        success: true,
+        message: 'A 6-digit OTP code has been sent to your email.',
+      });
+    } catch (emailErr) {
+      // Clean up the OTP record so user is not locked or confused by an unsent OTP
+      await Otp.deleteMany({ email });
+      console.error('[Forgot Password] Email delivery failed:', emailErr.message);
+
+      return res.status(503).json({
+        success: false,
+        message: 'Unable to send password reset email at this time. Please try again later or contact support.',
+      });
+    }
   } catch (err) {
     next(err);
   }
