@@ -115,19 +115,54 @@ const getTransporter = () => {
 };
 
 /**
- * Sends an email using the configured SMTP transporter
+ * Sends an email using Resend HTTP API (Port 443, never blocked on Render)
+ */
+const sendViaResend = async ({ to, subject, message, html }) => {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromAddress = process.env.SMTP_FROM || process.env.RESEND_FROM || 'RemindPro <onboarding@resend.dev>';
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: fromAddress,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      text: message,
+      ...(html ? { html } : {}),
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || data.error?.message || `Resend API Error (${response.status})`);
+  }
+
+  return data;
+};
+
+/**
+ * Sends an email using either Resend API (recommended for Render) or SMTP transporter
  */
 const sendEmail = async ({ to, subject, message, html }) => {
+  // If Resend API key is configured, prioritize HTTPS API (bypasses Render SMTP port blocks)
+  if (process.env.RESEND_API_KEY) {
+    return await sendViaResend({ to, subject, message, html });
+  }
+
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
   const fromAddress = process.env.SMTP_FROM || user;
 
   if (!user || !pass) {
-    throw new Error('SMTP credentials (SMTP_USER / SMTP_PASS) are not configured');
+    throw new Error('Email credentials not configured. Please set RESEND_API_KEY or SMTP_USER/SMTP_PASS in environment variables.');
   }
 
   if (!fromAddress) {
-    throw new Error('SMTP sender address (SMTP_FROM / SMTP_USER) is not configured');
+    throw new Error('Email sender address (SMTP_FROM / SMTP_USER) is not configured');
   }
 
   const transporter = getTransporter();
@@ -146,17 +181,22 @@ const sendEmail = async ({ to, subject, message, html }) => {
 };
 
 /**
- * Startup SMTP verification (non-fatal, safe logging)
+ * Startup email verification (non-fatal, safe logging)
  */
 const verifyTransporter = async () => {
   try {
+    if (process.env.RESEND_API_KEY) {
+      console.log('[Email] Resend API configured (HTTPS port 443 — Render production ready)');
+      return true;
+    }
+
     const host = process.env.SMTP_HOST || 'smtp.gmail.com';
     const port = Number(process.env.SMTP_PORT) || 465;
     const user = process.env.SMTP_USER;
     const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
 
     if (!user || !pass) {
-      console.warn('[Email] SMTP credentials not set (SMTP_USER / SMTP_PASS). Email functionality will be unavailable.');
+      console.warn('[Email] Email credentials not set (RESEND_API_KEY or SMTP_USER/SMTP_PASS). Email functionality will be unavailable.');
       return false;
     }
 
@@ -166,7 +206,7 @@ const verifyTransporter = async () => {
     return true;
   } catch (err) {
     // Log safely without revealing passwords
-    console.warn('[Email] SMTP verification failed:', err.message);
+    console.warn('[Email] Email verification failed:', err.message);
     return false;
   }
 };
