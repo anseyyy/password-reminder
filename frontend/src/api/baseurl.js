@@ -13,7 +13,11 @@ const getApiBaseUrl = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
 
   if (envUrl && envUrl.trim()) {
-    return envUrl.trim().replace(/\/+$/, '');
+    let url = envUrl.trim().replace(/\/+$/, '');
+    if (!url.endsWith('/api') && !url.includes('/api/')) {
+      url = `${url}/api`;
+    }
+    return url;
   }
 
   // Prevent silent fallback to localhost in production

@@ -15,7 +15,7 @@ app.set('trust proxy', 1);
  */
 const normalizeOrigin = (origin) => {
   if (!origin || typeof origin !== 'string') return '';
-  return origin.trim().replace(/\/+$/, '');
+  return origin.trim().replace(/\/+$/, '').toLowerCase();
 };
 
 /**
@@ -27,10 +27,12 @@ const getAllowedOrigins = () => {
     'http://127.0.0.1:3000',
     'http://localhost:5000',
     'http://127.0.0.1:5000',
+    'https://password-reminder.vercel.app',
+    'https://*.vercel.app',
   ];
 
   const envOrigins = [
-    process.env.CLIENT_URL,
+    ...(process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : []),
     ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
   ];
 
@@ -62,7 +64,42 @@ const isOriginAllowed = (origin, allowedOriginsList) => {
   });
 };
 
-app.use(helmet());
+// Configure Helmet with cross-origin resource policy enabled for API
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// Robust CORS configuration
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = getAllowedOrigins();
+    if (isOriginAllowed(origin, allowedOrigins)) {
+      callback(null, true);
+    } else {
+      console.warn(`[CORS] Request from disallowed origin: ${origin}`);
+      // Return callback(null, false) so browser rejects CORS cleanly without Express 500 error
+      callback(null, false);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Accept',
+    'X-Requested-With',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers',
+  ],
+  exposedHeaders: ['Authorization'],
+  optionsSuccessStatus: 204,
+  maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
 
 // Health check endpoints (available before rate limits and without authentication)
 app.get('/health', (req, res) => {
@@ -72,27 +109,6 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      const allowedOrigins = getAllowedOrigins();
-      if (isOriginAllowed(origin, allowedOrigins)) {
-        callback(null, true);
-      } else {
-        console.warn(`[CORS] Request from disallowed origin: ${origin}`);
-        // Return callback(null, false) so browser rejects CORS cleanly without Express 500 error
-        callback(null, false);
-      }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin'],
-    exposedHeaders: ['Authorization'],
-    optionsSuccessStatus: 204,
-    maxAge: 86400,
-  })
-);
 
 app.use(morgan('dev'));
 
@@ -104,7 +120,7 @@ const globalLimiter = rateLimit({
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === 'test',
+  skip: (req) => process.env.NODE_ENV === 'test' || req.method === 'OPTIONS',
   message: { success: false, message: 'Too many requests, please try again later.' },
 });
 
@@ -113,7 +129,7 @@ const authLimiter = rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === 'test',
+  skip: (req) => process.env.NODE_ENV === 'test' || req.method === 'OPTIONS',
   message: { success: false, message: 'Too many auth attempts, please try again later.' },
 });
 
