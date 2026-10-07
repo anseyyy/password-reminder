@@ -1,10 +1,79 @@
 const dns = require('dns');
+const net = require('net');
+const tls = require('tls');
 const nodemailer = require('nodemailer');
 
-// Force IPv4 DNS resolution order in Node 17+ to prevent ENETUNREACH errors on cloud container hosts like Render
+// Force IPv4 DNS resolution order in Node 17+
 if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
+
+/**
+ * Custom socket factory that dynamically resolves host to IPv4 and opens
+ * a direct IPv4 socket. This guarantees Nodemailer never connects to IPv6 on
+ * cloud container environments like Render (avoiding ENETUNREACH errors).
+ */
+const createIPv4Socket = async (options, callback) => {
+  try {
+    const host = options.host || 'smtp.gmail.com';
+    const port = options.port || (options.secure ? 465 : 587);
+    const timeout = options.connectionTimeout || 10000;
+
+    // Dynamically resolve hostname to an IPv4 address (family: 4)
+    let ipAddress = host;
+    if (!net.isIP(host)) {
+      try {
+        const lookupRes = await dns.promises.lookup(host, { family: 4 });
+        ipAddress = lookupRes.address;
+      } catch (dnsErr) {
+        // Fallback to resolve4 if standard lookup fails
+        const addrs = await dns.promises.resolve4(host);
+        if (addrs && addrs.length > 0) {
+          ipAddress = addrs[0];
+        } else {
+          throw dnsErr;
+        }
+      }
+    }
+
+    let socket;
+    if (options.secure) {
+      socket = tls.connect({
+        host: ipAddress,
+        port,
+        servername: host, // Preserve SNI for SSL/TLS verification
+        timeout,
+        ...(options.tls || {}),
+      });
+    } else {
+      socket = net.connect({
+        host: ipAddress,
+        port,
+        family: 4,
+        timeout,
+      });
+    }
+
+    let handled = false;
+    socket.once('error', (err) => {
+      if (!handled) {
+        handled = true;
+        callback(err);
+      }
+    });
+
+    const connectEvent = options.secure ? 'secureConnect' : 'connect';
+    socket.once(connectEvent, () => {
+      if (!handled) {
+        handled = true;
+        socket.setKeepAlive(true);
+        callback(null, { connection: socket });
+      }
+    });
+  } catch (err) {
+    callback(err);
+  }
+};
 
 /**
  * Creates and returns a configured Nodemailer transporter
@@ -25,9 +94,10 @@ const createTransporter = () => {
     host,
     port,
     secure: isSecure,
-    // Force IPv4 address family to prevent IPv6 routing failures on Render/cloud containers
+    // Strict IPv4 options
     family: Number(process.env.SMTP_FAMILY) || 4,
-    // Reasonable connection timeouts to prevent requests hanging for ~120s
+    getSocket: createIPv4Socket,
+    // Connection timeouts to prevent hanging requests
     connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT) || 10000, // 10s
     greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT) || 10000,     // 10s
     socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT) || 15000,         // 15s
@@ -102,7 +172,7 @@ const verifyTransporter = async () => {
 
     const transporter = getTransporter();
     await transporter.verify();
-    console.log(`[Email] SMTP connection verified successfully (${host})`);
+    console.log(`[Email] SMTP connection verified successfully over IPv4 (${host})`);
     return true;
   } catch (err) {
     // Log safely without revealing passwords
